@@ -47,6 +47,7 @@ class _HtmlEditorScreenState extends State<HtmlEditorScreen> {
   String? _selectedCase = 'Sentence case';
   String? _selectedFont = 'Default';
   String _selectedBorder = 'None'; // Added for border selection
+  String _selectedPageBorder = 'None';
 
   @override
   void initState() {
@@ -144,7 +145,7 @@ class _HtmlEditorScreenState extends State<HtmlEditorScreen> {
             _buildCustomToolbar(),
             Expanded(
               child: Container(
-                margin: EdgeInsets.all(12),
+                margin: EdgeInsets.all(8),
                 decoration: BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(16),
@@ -160,9 +161,12 @@ class _HtmlEditorScreenState extends State<HtmlEditorScreen> {
                   borderRadius: BorderRadius.circular(16),
                   child: Stack(
                     children: [
-                      WebViewWidget(
-                        controller: _controller,
-                        gestureRecognizers: const {},
+                      Padding(
+                        padding: const EdgeInsets.all(8.0),
+                        child: WebViewWidget(
+                          controller: _controller,
+                          gestureRecognizers: const {},
+                        ),
                       ),
                       if (_isLoading)
                         Container(
@@ -252,6 +256,8 @@ class _HtmlEditorScreenState extends State<HtmlEditorScreen> {
             SizedBox(width: 8),
             _buildToolbarButton(Icons.undo, () => _executeCommand('undo')),
             _buildToolbarButton(Icons.redo, () => _executeCommand('redo')),
+            SizedBox(width: 8),
+            _buildPageBorderSelector(), // Added page border selector
             SizedBox(width: 12),
           ],
         ),
@@ -598,6 +604,46 @@ class _HtmlEditorScreenState extends State<HtmlEditorScreen> {
     );
   }
 
+  Widget _buildPageBorderSelector() {
+    final pageBorders = {
+      'None': 'none',
+      'Solid': '1px solid #000000',
+      'Dashed': '1px dashed #000000',
+      'Dotted': '1px dotted #000000',
+      'Double': '3px double #000000',
+    };
+
+    return Container(
+      height: 38,
+      padding: EdgeInsets.symmetric(horizontal: 6),
+      decoration: BoxDecoration(
+        border: Border.all(color: Colors.grey.shade300),
+        borderRadius: BorderRadius.circular(8),
+        color: Colors.white,
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          value: _selectedPageBorder,
+          isDense: true,
+          icon: Icon(Icons.arrow_drop_down, size: 16, color: Colors.grey.shade700),
+          style: TextStyle(fontSize: 12, color: Colors.black87),
+          items: pageBorders.keys.map((label) {
+            return DropdownMenuItem<String>(
+              value: label,
+              child: Text(label, style: TextStyle(fontSize: 12)),
+            );
+          }).toList(),
+          onChanged: (value) async {
+            if (value == null) return;
+            setState(() => _selectedPageBorder = value);
+            final borderStyle = pageBorders[value]!;
+            await _changePageBorderStyle(borderStyle);
+          },
+        ),
+      ),
+    );
+  }
+
   void _loadEditorContent() {
     final initialContent = _getInitialText();
     final html = '''
@@ -614,12 +660,18 @@ class _HtmlEditorScreenState extends State<HtmlEditorScreen> {
             color: #2C3E50;
             margin: 0;
             padding: 16px;
-            height: 100vh;
+            min-height: 100vh;
+            width: 100%;
+            box-sizing: border-box; /* Added to include border in dimensions */
+            border: none; /* Added default page border */
             overflow-y: auto;
           }
           #editor {
             outline: none;
             min-height: 200px;
+            width: 100%; /* Ensure editor spans full body width */
+            box-sizing: border-box; /* Ensure padding/margins are included */
+            border: none;
           }
           table {
             border-collapse: collapse;
@@ -659,8 +711,16 @@ class _HtmlEditorScreenState extends State<HtmlEditorScreen> {
           let lastRange = null;
 
           editor.addEventListener('input', function() {
-            onChange.postMessage(editor.innerHTML.length > 0 ? 'true' : 'false');
-          });
+  onChange.postMessage(editor.innerHTML.length > 0 ? 'true' : 'false');
+  // Update body height to match editor content
+  var editorHeight = editor.offsetHeight;
+  var body = document.body;
+  if (editorHeight > window.innerHeight) {
+    body.style.height = editorHeight + "px";
+  } else {
+    body.style.height = "auto";
+  }
+});
 
           document.addEventListener('selectionchange', function() {
           const isBold = document.queryCommandState('bold');
@@ -1081,8 +1141,11 @@ class _HtmlEditorScreenState extends State<HtmlEditorScreen> {
       ),
     );
     if (result == true) {
-      await _controller
-          .runJavaScript('document.getElementById("editor").innerHTML = "";');
+      await _controller.runJavaScript('''
+  document.getElementById("editor").innerHTML = "";
+  document.body.style.border = "none"; // Reset page border
+document.body.style.height = "auto"; // Reset body height
+''');
       setState(() {
         _hasContent = false;
         _isBold = false;
@@ -1094,6 +1157,7 @@ class _HtmlEditorScreenState extends State<HtmlEditorScreen> {
         _isSuperscript = false; // Add here
         _isHighlighted = false;
         _selectedBorder = 'None'; // Reset border selection
+        _selectedPageBorder = 'None';
       });
     }
   }
@@ -1561,6 +1625,28 @@ class _HtmlEditorScreenState extends State<HtmlEditorScreen> {
     } catch (e) {
       ToastHelper.showToast('Error inserting table: $e');
     }
+  }
+
+  Future<void> _changePageBorderStyle(String borderStyle) async {
+    final safeBorderStyle = borderStyle.replaceAll('"', '\\"');
+    await _controller.runJavaScript('''
+    (function() {
+  var body = document.body;
+  var editor = document.getElementById('editor');
+  if (!body || !editor) return;
+  body.style.border = "${safeBorderStyle}";
+  body.style.boxSizing = "border-box";
+  body.style.width = "100%";
+  body.style.minHeight = "100vh"; // Ensure body can grow with content
+  // Force body to match editor content height if larger
+  var editorHeight = editor.offsetHeight;
+  if (editorHeight > window.innerHeight) {
+    body.style.height = editorHeight + "px";
+  } else {
+    body.style.height = "auto";
+  }
+})();
+  ''');
   }
 
   String _getInitialText() {
